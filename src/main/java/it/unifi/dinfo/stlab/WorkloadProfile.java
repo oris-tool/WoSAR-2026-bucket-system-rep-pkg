@@ -1,19 +1,30 @@
 package it.unifi.dinfo.stlab;
 
 import java.util.*;
+import java.util.logging.Level;
 
 public class WorkloadProfile {
+
+    public WorkloadLevel getInitialWorkloadLevel() {
+        return initialWorkloadLevel;
+    }
+
+    public String getName() {
+        return name;
+    }
 
     public record Step(WorkloadLevel from, WorkloadLevel to, double rate) {}
 
     private final Map<String, WorkloadLevel> levels;
     private final Map<String, Map<String, Double>> transitions; // from -> (to -> rate)
     private final String name;
+    private final WorkloadLevel initialWorkloadLevel;
 
     private WorkloadProfile(Map<String, WorkloadLevel> levels,
-                       Map<String, Map<String, Double>> transitions, String name) {
+                       Map<String, Map<String, Double>> transitions, WorkloadLevel intialLevel, String name) {
         this.levels = levels;
         this.transitions = transitions;
+        this.initialWorkloadLevel = intialLevel;
         this.name = name;
     }
 
@@ -59,6 +70,7 @@ public class WorkloadProfile {
     public static final class Builder {
         private final Map<String, WorkloadLevel> levels = new LinkedHashMap<>();
         private final Map<String, Map<String, Double>> transitions = new LinkedHashMap<>();
+        private WorkloadLevel intialWorkloadLevel;
 
         public WorkloadLevel level(String name, double rate) {
             if (levels.containsKey(name))
@@ -80,6 +92,12 @@ public class WorkloadProfile {
             return this;
         }
 
+        public Builder initialWorkloadLevel(WorkloadLevel level) {
+            requireOwned(level);
+            this.intialWorkloadLevel = level;
+            return this;
+        }
+
         private void requireOwned(WorkloadLevel l) {
             if (levels.get(l.name()) != l)
                 throw new IllegalArgumentException(
@@ -93,7 +111,7 @@ public class WorkloadProfile {
                     tr.put(from, Collections.unmodifiableMap(new LinkedHashMap<>(m))));
             return new WorkloadProfile(
                     Collections.unmodifiableMap(lv),
-                    Collections.unmodifiableMap(tr), name);
+                    Collections.unmodifiableMap(tr), this.intialWorkloadLevel, name);
         }
     }
 }
