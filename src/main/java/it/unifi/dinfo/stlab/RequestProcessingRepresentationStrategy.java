@@ -4,7 +4,6 @@ import org.oristool.petrinet.PetriNet;
 
 import java.util.Map;
 
-// XXX we assume that some place and transition name are known a-priori
 public abstract class RequestProcessingRepresentationStrategy {
 
     public abstract String getInProcessPlaces();

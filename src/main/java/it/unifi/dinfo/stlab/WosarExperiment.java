@@ -75,7 +75,7 @@ public class WosarExperiment {
                     long start = System.nanoTime();
 
                     // fresh BPH strategy per model: build(net) is stateful
-                    MicroserviceModel model = model(bph(), profile, cfg.bucketDepth(), cfg.bucketsNumber());
+                    MicroserviceModel model = model(bphRequest(), profile, cfg.bucketDepth(), cfg.bucketsNumber(), bphRejuvenation());
 
                     TransientSolution<Marking, RewardRate> rew;
                     double rejuvenationMass;
@@ -119,7 +119,7 @@ public class WosarExperiment {
     }
 
 
-    public static RequestProcessingRepresentationStrategy bph() {
+    public static RequestProcessingRepresentationStrategy bphRequest() {
         BphProcessingRepresentationStrategy bph = new BphProcessingRepresentationStrategy(BPH_PHASES, MAX_AGING_LEVEL);
         bph.phaseRates(1,2,3,4,5)
                 .weights(0, 1,2,3,4,5)
@@ -129,10 +129,17 @@ public class WosarExperiment {
         return bph;
     }
 
-    public static MicroserviceModel model(RequestProcessingRepresentationStrategy requestProcessing, WorkloadProfile profile, int bucketDepth, int bucketsNumber ) {
+    public static RejuvenationRepresentationStrategy bphRejuvenation() {
+        BphRejuvenationRepresentationStrategy bph = new BphRejuvenationRepresentationStrategy(BPH_PHASES);
+        bph.weights(1,2,3,4,5);
+        return bph;
+    }
+
+    public static MicroserviceModel model(RequestProcessingRepresentationStrategy requestProcessing, WorkloadProfile profile, int bucketDepth, int bucketsNumber, RejuvenationRepresentationStrategy rejuvenationStrategy ) {
         MicroserviceModel.Builder builder = baseModelBuilder();
         builder.workLoadProfile(profile).initialWorkloadLevel(profile.getInitialWorkloadLevel().name());
         builder.processingStrategy(requestProcessing);
+        builder.rejuvenationStrategy(rejuvenationStrategy);
         builder.bucketDepth(bucketDepth).bucketsNumber(bucketsNumber);
         return builder.build();
     }

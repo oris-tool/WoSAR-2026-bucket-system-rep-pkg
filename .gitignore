@@ -42,6 +42,8 @@ build/
 results/**/.venv/
 
 results/**/plot/
+results/**/*.tex
+results/**/*.pdf
 results/**/plot_single/
 results/**/plot_single_norm/
 results/**/plot_single_log/

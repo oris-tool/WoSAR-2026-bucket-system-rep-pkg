@@ -32,7 +32,9 @@ public class MicroserviceModel {
 
     private String performanceViolationProbabilityExpr;
 
-    private static final double DISCRETIZATION_STEP = 0.1;
+    private Map<ResponseTimeConfiguration, Double> thresholdViolationProbabilityMap;
+
+    private static final double DISCRETIZATION_STEP = 0.0001;
 
 
 
@@ -43,6 +45,7 @@ public class MicroserviceModel {
 
 
     private RequestProcessingRepresentationStrategy processingRepresentation;
+    private RejuvenationRepresentationStrategy rejuvenationRepresentation;
 
     private MicroserviceModel(Builder builder) {
         this.net = builder.net;
@@ -52,9 +55,27 @@ public class MicroserviceModel {
         this.bucketDepth = builder.bucketDepth;
         this.bucketsNumber = builder.bucketsNumber;
         this.processingRepresentation = builder.processingRepresentation;
+        this.rejuvenationRepresentation = builder.rejuvenationRepresentation;
         this.thresholdMean = builder.thresholdMean;
         this.thresholdStdDev = builder.thresholdStdDev;
         this.performanceViolationProbabilityExpr = builder.performanceViolationLaw;
+        this.thresholdViolationProbabilityMap = Map.copyOf(builder.thresholdViolationProbabilityMap);
+    }
+
+    /**
+     * Violation probabilities actually installed in the probability switch
+     * (empty if a custom performanceViolationLaw was supplied to the builder).
+     */
+    public Map<ResponseTimeConfiguration, Double> getThresholdViolationProbabilityMap() {
+        return thresholdViolationProbabilityMap;
+    }
+
+    public double getThresholdMean() {
+        return thresholdMean;
+    }
+
+    public double getThresholdStdDev() {
+        return thresholdStdDev;
     }
 
     public static Builder  builder() {
@@ -136,7 +157,7 @@ public class MicroserviceModel {
     }
 
     public String getTimeToRejuvenationReward(){
-        return "Rejuvenation";
+        return rejuvenationRepresentation.getInRejuvenationPlaces();
     }
 
     public String getThroughputReward(){
@@ -144,15 +165,16 @@ public class MicroserviceModel {
     }
 
     public String getRejuvenationDueToLoadReward(){
+        String inRejuvenation = "(" + rejuvenationRepresentation.getInRejuvenationPlaces() + ")==1";
         StringBuilder sb = new StringBuilder();
-        sb.append("Rejuvenation==1&&AgingLevel!=").append(maxAgingLevel);
+        sb.append(inRejuvenation).append("&&AgingLevel!=").append(maxAgingLevel);
         for (int lvl = 0; lvl < maxAgingLevel; lvl++)
-            sb.append(";Rejuvenation==1&&AgingLevel==").append(lvl);
+            sb.append(";").append(inRejuvenation).append("&&AgingLevel==").append(lvl);
         return sb.toString();
     }
 
     public String getRejuvenationDueToAging(){
-        return "Rejuvenation==1&&AgingLevel==" + maxAgingLevel;
+        return "(" + rejuvenationRepresentation.getInRejuvenationPlaces() + ")==1&&AgingLevel==" + maxAgingLevel;
     }
 
     public String getViolationRateReward(){
@@ -160,11 +182,7 @@ public class MicroserviceModel {
     }
 
 
-    /**
-     * Human-readable name -> reward expression, one entry per column
-     * (getRejuvenationDueToLoadReward expands to maxAgingLevel+1 columns).
-     * Iteration order matches the column order of getTotalReward.
-     */
+
     public LinkedHashMap<String, String> getNamedRewards(){
         LinkedHashMap<String, String> named = new LinkedHashMap<>();
         named.put("TimeToRejuvenation", getTimeToRejuvenationReward());
@@ -182,6 +200,61 @@ public class MicroserviceModel {
         return String.join(";", getNamedRewards().values());
     }
 
+
+    public double calculateAvailabilityMeasure(double[] timeToRejuvenationCdf, double step){
+        if (timeToRejuvenationCdf == null || timeToRejuvenationCdf.length == 0)
+            throw new IllegalArgumentException("invalid CDF");
+        if (step <= 0)
+            throw new IllegalArgumentException("step > 0");
+
+        double[] rejuvenationCdf = rejuvenationRepresentation.getRejuvenationTimeDistribution(step);
+        double[] cycleCdf = convolveCdfs(timeToRejuvenationCdf, rejuvenationCdf);
+
+        double meanTimeToRejuvenation = meanFromCdf(timeToRejuvenationCdf, step);
+        double meanCycle = meanFromCdf(cycleCdf, step);
+        return meanTimeToRejuvenation / meanCycle;
+    }
+
+    /** CDF della somma di due variabili indipendenti date le rispettive CDF (stesso passo). */
+    private static double[] convolveCdfs(double[] cdfA, double[] cdfB) {
+        double[] pmfA = pmfFromCdf(cdfA);
+        double[] pmfB = pmfFromCdf(cdfB);
+
+        double[] pmf = new double[pmfA.length + pmfB.length - 1];
+        for (int i = 0; i < pmfA.length; i++) {
+            if (pmfA[i] == 0.0) continue;
+            for (int j = 0; j < pmfB.length; j++)
+                pmf[i + j] += pmfA[i] * pmfB[j];
+        }
+
+        double[] cdf = new double[pmf.length];
+        double acc = 0.0;
+        for (int t = 0; t < pmf.length; t++) {
+            acc += pmf[t];
+            cdf[t] = Math.min(acc, 1.0);
+        }
+        return cdf;
+    }
+
+    private static double[] pmfFromCdf(double[] cdf) {
+        double[] pmf = new double[cdf.length];
+        double prev = 0.0;
+        for (int i = 0; i < cdf.length; i++) {
+            pmf[i] = cdf[i] - prev;
+            prev = cdf[i];
+        }
+        return pmf;
+    }
+
+    private static double meanFromCdf(double[] cdf, double step) {
+        double mean = 0.0;
+        double prev = 0.0;
+        for (int i = 0; i < cdf.length; i++) {
+            mean += i * step * (cdf[i] - prev);
+            prev = cdf[i];
+        }
+        return mean;
+    }
 
     public Map<String, double[]> getTransientFromRewards(String rewardsAsString) {
         String[] exprs = rewardsAsString.split(";");
@@ -227,6 +300,7 @@ public class MicroserviceModel {
 
 
         private RequestProcessingRepresentationStrategy processingRepresentation;
+        private RejuvenationRepresentationStrategy rejuvenationRepresentation;
 
         private WorkloadProfile profile;
         private String initialWorkloadLevel;
@@ -249,6 +323,11 @@ public class MicroserviceModel {
 
         public Builder processingStrategy(RequestProcessingRepresentationStrategy strategy) {
             this.processingRepresentation = strategy;
+            return this;
+        }
+
+        public Builder rejuvenationStrategy(RejuvenationRepresentationStrategy strategy) {
+            this.rejuvenationRepresentation = strategy;
             return this;
         }
 
@@ -559,12 +638,9 @@ public class MicroserviceModel {
             rejTrigger.addFeature(StochasticTransitionFeature.newDeterministicInstance(new BigDecimal("0"), MarkingExpr.from("1", net)));
             rejTrigger.addFeature(new Priority(0));
 
-
-            Transition rejTime = net.addTransition("rejTime");
-            net.addPostcondition(rejTime, Ready);
-            net.addPrecondition(Rejuvenation, rejTime);
-            rejTime.addFeature(StochasticTransitionFeature.newExponentialInstance(new BigDecimal("1"), MarkingExpr.from("1", net)));
-            rejTime.addFeature(new PostUpdater("AgingLevel=0", net));
+            if (rejuvenationRepresentation == null)
+                rejuvenationRepresentation = new ExponentialRejuvenationRepresentationStrategy(1.0);
+            rejuvenationRepresentation.build(net);
         }
 
 
