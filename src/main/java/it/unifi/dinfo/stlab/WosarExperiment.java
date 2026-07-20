@@ -33,7 +33,7 @@ public class WosarExperiment {
     private static final double TIME_STEP = 0.1;
     private static final String STOP_CONDITION = "Rejuvenation==1";
 
-    private static final Path OUTPUT_DIR = Paths.get("results/02");
+    private static final Path OUTPUT_DIR = Paths.get("results/experiment_output");
 
     private static final List<WorkloadProfile> WORKLOADS = List.of(
             mostlyMid(),
