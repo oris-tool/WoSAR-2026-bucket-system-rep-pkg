@@ -29,16 +29,16 @@ public class WosarExperiment {
     // time point (or MAX_TIME_LIMIT is reached, to avoid rare-event blowups)
     private static final double INITIAL_TIME_LIMIT = 50;
     private static final double MAX_TIME_LIMIT = 2000;
-    private static final double EPSILON = 0.01;
+    private static final double EPSILON = 0.001;
     private static final double TIME_STEP = 0.1;
     private static final String STOP_CONDITION = "Rejuvenation==1";
 
-    private static final Path OUTPUT_DIR = Paths.get("results");
+    private static final Path OUTPUT_DIR = Paths.get("results/02");
 
     private static final List<WorkloadProfile> WORKLOADS = List.of(
-            standard(),
+            mostlyMid(),
             spiky(),
-            mostlyMid()
+            dailyPattern()
     );
 
 
@@ -61,7 +61,7 @@ public class WosarExperiment {
         int current = 0;
 
         try (BufferedWriter index = Files.newBufferedWriter(OUTPUT_DIR.resolve("experiments_index.csv"))) {
-            index.write("profile,bucketsNumber,bucketDepth,timeLimit,rejuvenationMass,rewardsCsv,mappingCsv,analysisSeconds");
+            index.write("profile,bucketsNumber,bucketDepth,timeLimit,rejuvenationMass,availability,rewardsCsv,mappingCsv,analysisSeconds");
             index.newLine();
 
             for (WorkloadProfile profile : WORKLOADS) {
@@ -96,15 +96,24 @@ public class WosarExperiment {
                                 "    WARNING: mass=%.4f at MAX_TIME_LIMIT=%.0f, truncated horizon%n",
                                 rejuvenationMass, MAX_TIME_LIMIT);
 
+                    // availability media: la colonna TimeToRejuvenation sotto stop
+                    // condition assorbente e' la CDF del time-to-rejuvenation
+                    double[][][] finalSol = rew.getSolution();
+                    double[] timeToRejuvenationCdf = new double[finalSol.length];
+                    for (int t = 0; t < finalSol.length; t++)
+                        timeToRejuvenationCdf[t] = finalSol[t][0][0];
+                    double availability = model.calculateAvailabilityMeasure(timeToRejuvenationCdf, TIME_STEP);
+                    System.out.printf(Locale.US, "    availability=%.6f%n", availability);
+
                     String rewardsCsv = OUTPUT_DIR.resolve(label + "_rewards.csv").toString();
                     String mappingCsv = OUTPUT_DIR.resolve(label + "_rewards_mapping.csv").toString();
                     Utils.exportNamedRewardsCsv(rew, TIME_STEP, model.getNamedRewards(),
                             rewardsCsv, mappingCsv);
 
                     double seconds = (System.nanoTime() - start) / 1e9;
-                    index.write(String.format(Locale.US, "%s,%d,%d,%.0f,%.6f,%s,%s,%.2f",
+                    index.write(String.format(Locale.US, "%s,%d,%d,%.0f,%.6f,%.6f,%s,%s,%.2f",
                             profile.getName(), cfg.bucketsNumber(), cfg.bucketDepth(),
-                            limit, rejuvenationMass, rewardsCsv, mappingCsv, seconds));
+                            limit, rejuvenationMass, availability, rewardsCsv, mappingCsv, seconds));
                     index.newLine();
                     index.flush();
 
@@ -166,15 +175,15 @@ public class WosarExperiment {
         return p;
     }
 
-    // 2) Solo Mid e High, con picchi improvvisi e brevi verso High
+    // 2) Solo Low e High, con picchi improvvisi e brevi verso High
     public static WorkloadProfile spiky() {
         WorkloadProfile.Builder pb = new WorkloadProfile.Builder();
-        WorkloadLevel mid  = pb.level("Mid",  3.0);
+        WorkloadLevel low  = pb.level("low",  1.0);
         WorkloadLevel high = pb.level("High", 6.0);
         WorkloadProfile p = pb
-                .transition(mid,  high, 0.03)  // il picco parte di rado -> "improvviso"
-                .transition(high, mid,  0.6)   // ...e rientra subito -> picco breve
-                .initialWorkloadLevel(mid)
+                .transition(low,  high, 0.05)  // il picco parte di rado
+                .transition(high, low,  0.1)
+                .initialWorkloadLevel(low)
                 .build("Spiky");
         return p;
     }
@@ -186,12 +195,30 @@ public class WosarExperiment {
         WorkloadLevel mid  = pb.level("Mid",  3.0);
         WorkloadLevel high = pb.level("High", 6.0);
         WorkloadProfile p = pb
-                .transition(mid,  high, 0.05)  // ogni tanto sale
-                .transition(mid,  low,  0.05)  // ogni tanto scende
-                .transition(high, mid,  0.5)   // escursione breve, rientra in fretta
-                .transition(low,  mid,  0.5)   // escursione breve, rientra in fretta
+                .transition(mid,  high, 0.05)
+                .transition(mid,  low,  0.05)
+                .transition(high, mid,  0.5)
+                .transition(low,  mid,  0.5)
                 .initialWorkloadLevel(mid)
                 .build("MostlyMid");
+        return p;
+    }
+
+    public static WorkloadProfile dailyPattern() {
+        WorkloadProfile.Builder pb = new WorkloadProfile.Builder();
+        WorkloadLevel low  = pb.level("Low",  1.0);
+        WorkloadLevel mid1  = pb.level("Mid1",  3.0);
+        WorkloadLevel high1 = pb.level("High1", 6.0);
+        WorkloadLevel mid2  = pb.level("Mid2",  3.0);
+        WorkloadLevel high2 = pb.level("High2", 6.0);
+        WorkloadProfile p = pb
+                .transition(low,  mid1,  0.1)
+                .transition(mid1,  high1, 0.25)
+                .transition(high1, mid2,  0.5)
+                .transition(mid2,  high2,  0.25)
+                .transition(high2,  low,  0.25)
+                .initialWorkloadLevel(low)
+                .build("DailyPattern");
         return p;
     }
 

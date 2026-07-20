@@ -47,3 +47,4 @@ results/**/*.pdf
 results/**/plot_single/
 results/**/plot_single_norm/
 results/**/plot_single_log/
+results/**/__pycache__

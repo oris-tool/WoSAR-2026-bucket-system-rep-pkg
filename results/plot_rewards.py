@@ -4,11 +4,12 @@ Expected file naming convention:
     workloadProfileName_N<buckets>_D<depth>_rewards.csv
 Each CSV contains a 'time' column (x-axis) and one or more reward columns.
 
-Four PDF versions are generated for each CSV:
-    <folder>/plot/<name>.pdf              -> a grid of subplots (one per reward)
-    <folder>/plot_single/<name>.pdf       -> single plot, all rewards, linear y
-    <folder>/plot_single_log/<name>.pdf   -> single plot, all rewards, log y
-    <folder>/plot_single_norm/<name>.pdf  -> single plot, rewards min-max normalized
+Four PDF versions are generated for each CSV, in a subfolder per
+configuration (<config> = workloadProfileName_N<buckets>_D<depth>):
+    <folder>/plots/<config>/grid.pdf        -> grid of subplots (one per reward)
+    <folder>/plots/<config>/single.pdf      -> single plot, all rewards, linear y
+    <folder>/plots/<config>/single_log.pdf  -> single plot, all rewards, log y
+    <folder>/plots/<config>/single_norm.pdf -> single plot, min-max normalized
 
 Usage:
     python plot_rewards.py [folder]
@@ -16,6 +17,7 @@ If 'folder' is not specified, the current folder is used.
 Example (run from 'results'):
     python plot_rewards.py 01
 """
+import re
 import sys
 import math
 from pathlib import Path
@@ -100,16 +102,8 @@ def plot_single(df, reward_cols, stem: str, out_path: Path,
     plt.close(fig)
 
 
-def main() -> None:
-    base = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd()
-    base = base.resolve()
-
-    grid_dir = base / "plot"
-    single_dir = base / "plot_single"
-    single_log_dir = base / "plot_single_log"
-    single_norm_dir = base / "plot_single_norm"
-    for d in (grid_dir, single_dir, single_log_dir, single_norm_dir):
-        d.mkdir(exist_ok=True)
+def run(base: Path) -> None:
+    plots_dir = base / "plots"
 
     # only the reward files, excluding the *_mapping.csv files and the index
     csv_files = sorted(
@@ -121,26 +115,32 @@ def main() -> None:
         print(f"No *_rewards.csv files found in {base}")
         return
 
-    print(f"Found {len(csv_files)} files in {base}")
-    print(f"  grid            -> {grid_dir}")
-    print(f"  single (linear) -> {single_dir}")
-    print(f"  single (log)    -> {single_log_dir}")
-    print(f"  single (norm)   -> {single_norm_dir}")
+    print(f"Found {len(csv_files)} files in {base}: plots -> {plots_dir}")
 
     for csv_path in csv_files:
         df, reward_cols = load_rewards(csv_path)
         if df is None:
             continue
         stem = csv_path.stem  # e.g. MostlyMid_N1_D1_rewards
-        plot_grid(df, reward_cols, stem, grid_dir / f"{stem}.pdf")
-        plot_single(df, reward_cols, stem, single_dir / f"{stem}.pdf")
-        plot_single(df, reward_cols, stem, single_log_dir / f"{stem}.pdf",
+        config = stem.removesuffix("_rewards")  # e.g. MostlyMid_N1_D1
+        # bucketsNumber is presented as M in the paper; filenames keep N
+        title = re.sub(r"_N(\d+)_D(\d+)", r"_M\1_D\2", config)
+        out_dir = plots_dir / config
+        out_dir.mkdir(parents=True, exist_ok=True)
+        plot_grid(df, reward_cols, title, out_dir / "grid.pdf")
+        plot_single(df, reward_cols, title, out_dir / "single.pdf")
+        plot_single(df, reward_cols, title, out_dir / "single_log.pdf",
                     yscale="log")
-        plot_single(df, reward_cols, stem, single_norm_dir / f"{stem}.pdf",
+        plot_single(df, reward_cols, title, out_dir / "single_norm.pdf",
                     normalize=True)
-        print(f"[ok]   {csv_path.name}")
+        print(f"[ok]   {config}")
 
-    print("Done")
+    print(f"Done: {plots_dir}")
+
+
+def main() -> None:
+    base = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd()
+    run(base.resolve())
 
 
 if __name__ == "__main__":

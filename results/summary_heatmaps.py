@@ -1,18 +1,18 @@
-"""Generates N x D heatmaps from the summary.csv produced by summarize_rewards.py.
+"""Generates M x D heatmaps from the summary.csv produced by summarize_rewards.py.
 
-One figure per workload profile: a panel for each key metric, with
-bucketsNumber (N) on the y-axis, bucketDepth (D) on the x-axis and the
-metric value both color-encoded (single-hue sequential ramp) and printed
-in each cell.
+One PDF per (workload profile, metric): every metric column of summary.csv
+gets its own single-panel heatmap, with bucketsNumber (M) on the y-axis,
+bucketDepth (D) on the x-axis and the metric value both color-encoded
+(single-hue sequential ramp) and printed in each cell.
 
 Usage:
     python summary_heatmaps.py [folder]
 If 'folder' is not specified, the current folder is used.
 Example (run from 'results'):
     python summary_heatmaps.py 01
-Output: <folder>/heatmap/<profile>.pdf
+Output: <folder>/heatmaps/<profile>/<metric>.pdf
 """
-import math
+import re
 import sys
 from pathlib import Path
 
@@ -23,13 +23,42 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap, to_rgb
 
-# (summary.csv column, panel title)
-METRICS = [
-    ("TimeToRejuvenation_mean",          "Mean time to rejuvenation"),
-    ("Throughput_timeAvg",               "Mean throughput"),
-    ("ViolationRate_timeAvg",            "Mean violation rate"),
-    ("RejuvenationDueToAging_finalMass", "P(rejuvenation due to aging)"),
-]
+# experiment keys / parameters: everything else in summary.csv is a metric
+KEY_COLUMNS = ("profile", "bucketsNumber", "bucketDepth", "timeLimit")
+
+def words(name: str) -> str:
+    """CamelCase to spaced lowercase: 'RejuvenationDueToLoad' ->
+    'rejuvenation due to load', 'AgingLevel0' -> 'aging level 0'."""
+    return re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Za-z])(?=\d)", " ",
+                  name).lower()
+
+
+def event(name: str, parenthetical: bool = True) -> str:
+    """The event a first-passage CDF refers to: 'TimeToRejuvenation' ->
+    'rejuvenation'; qualifiers after '_' become a parenthetical (or a
+    comma-separated tail), e.g. 'RejuvenationDueToLoad_AgingLevel1' ->
+    'rejuvenation due to load (aging level 1)'."""
+    base, *qualifiers = name.split("_")
+    text = words(re.sub(r"^TimeTo", "", base))
+    if qualifiers:
+        tail = ", ".join(words(q) for q in qualifiers)
+        text += f" ({tail})" if parenthetical else f", {tail}"
+    return text
+
+
+def title(col: str) -> str:
+    """Uniform human-readable title derived from the summary.csv column:
+    P(<event>) for CDF final masses, 'Mean time to <event>' for CDF
+    conditional means, 'Mean/Total <reward>' for rate rewards."""
+    if col.endswith("_finalMass"):
+        return f"P({event(col.removesuffix('_finalMass'), False)})"
+    if col.endswith("_mean"):
+        return f"Mean time to {event(col.removesuffix('_mean'))}"
+    if col.endswith("_timeAvg"):
+        return f"Mean {words(col.removesuffix('_timeAvg'))}"
+    if col.endswith("_total"):
+        return f"Total {words(col.removesuffix('_total'))}"
+    return words(col).capitalize()
 
 # single-hue sequential ramp (blue, light -> dark) and chart ink roles
 SEQ_RAMP = ["#cde2fb", "#b7d3f6", "#9ec5f4", "#86b6ef", "#6da7ec", "#5598e7",
@@ -78,7 +107,7 @@ def heatmap_panel(ax, pivot: pd.DataFrame, title: str) -> None:
 
     ax.set_title(title, fontsize=10, color=INK)
     ax.set_xlabel("Bucket depth (D)", fontsize=9, color=INK_SECONDARY)
-    ax.set_ylabel("Buckets number (N)", fontsize=9, color=INK_SECONDARY)
+    ax.set_ylabel("Buckets number (M)", fontsize=9, color=INK_SECONDARY)
     ax.set_xticks(np.arange(len(pivot.columns)) + 0.5,
                   pivot.columns, fontsize=9, color=INK_SECONDARY)
     ax.set_yticks(np.arange(len(pivot.index)) + 0.5,
@@ -89,52 +118,48 @@ def heatmap_panel(ax, pivot: pd.DataFrame, title: str) -> None:
     ax.set_aspect("equal")
 
 
-def profile_figure(df: pd.DataFrame, profile: str, out_path: Path) -> None:
-    ncols = 2
-    nrows = math.ceil(len(METRICS) / ncols)
-    fig, axes = plt.subplots(nrows, ncols,
-                             figsize=(4.6 * ncols, 4.2 * nrows),
-                             squeeze=False)
+def metric_figure(df: pd.DataFrame, profile: str, col: str,
+                  out_path: Path) -> None:
+    fig, ax = plt.subplots(figsize=(4.6, 4.4))
     fig.patch.set_facecolor(SURFACE)
 
-    axes_flat = axes.flatten()
-    for ax, (col, title) in zip(axes_flat, METRICS):
-        pivot = df.pivot(index="bucketsNumber", columns="bucketDepth",
-                         values=col).sort_index()
-        heatmap_panel(ax, pivot, title)
-    for ax in axes_flat[len(METRICS):]:
-        ax.set_visible(False)
+    pivot = df.pivot(index="bucketsNumber", columns="bucketDepth",
+                     values=col).sort_index()
+    heatmap_panel(ax, pivot, title(col))
 
-    fig.suptitle(profile, fontsize=13, fontweight="bold", color=INK)
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.suptitle(profile, fontsize=12, fontweight="bold", color=INK)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
     fig.savefig(out_path, facecolor=SURFACE)
     plt.close(fig)
 
 
-def main() -> None:
-    base = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd()
-    base = base.resolve()
-
+def run(base: Path) -> None:
     summary_path = base / "summary.csv"
     if not summary_path.exists():
         print(f"{summary_path} not found: run summarize_rewards.py first")
         return
 
     df = pd.read_csv(summary_path)
-    missing = [c for c, _ in METRICS if c not in df.columns]
-    if missing:
-        print(f"Missing columns in summary.csv: {missing}")
+    metric_cols = [c for c in df.columns if c not in KEY_COLUMNS]
+    if not metric_cols:
+        print("No metric column found in summary.csv")
         return
 
-    out_dir = base / "heatmap"
-    out_dir.mkdir(exist_ok=True)
-
+    out_dir = base / "heatmaps"
     for profile in df["profile"].unique():
-        out_path = out_dir / f"{profile}.pdf"
-        profile_figure(df[df["profile"] == profile], profile, out_path)
-        print(f"[ok]   {out_path.name}")
+        profile_dir = out_dir / profile
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        sub = df[df["profile"] == profile]
+        for col in metric_cols:
+            metric_figure(sub, profile, col, profile_dir / f"{col}.pdf")
+        print(f"[ok]   {profile} ({len(metric_cols)} heatmaps)")
 
     print(f"Done: {out_dir}")
+
+
+def main() -> None:
+    base = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd()
+    run(base.resolve())
 
 
 if __name__ == "__main__":

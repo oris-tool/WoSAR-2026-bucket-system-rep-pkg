@@ -79,9 +79,12 @@ public class BphRejuvenationRepresentationStrategy extends RejuvenationRepresent
 
     @Override
     public String getInRejuvenationPlaces() {
-        StringBuilder inRejuvenationPlaces = new StringBuilder();
+        // Rejuvenation incluso: nei marking tangibili vale 0 (lo switch immediato
+        // lo svuota subito), ma con una stopOn condition su Rejuvenation==1 il
+        // token vi resta congelato ed e' li' che si accumula la CDF
+        StringBuilder inRejuvenationPlaces = new StringBuilder("Rejuvenation");
         for (int i = 1; i <= phases; i++)
-            inRejuvenationPlaces.append(i > 1 ? "+" : "").append("RejPh").append(i);
+            inRejuvenationPlaces.append("+RejPh").append(i);
         return inRejuvenationPlaces.toString();
     }
 

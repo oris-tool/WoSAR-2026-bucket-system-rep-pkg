@@ -13,11 +13,16 @@ Reward columns are not all averaged the same way:
                   probability of that rejuvenation cause)
   The naive column average would be meaningless here.
 
-  Instantaneous expected rates (Throughput, ViolationRate; they drop to 0
-  after absorption):
+  Instantaneous expected rates (Throughput, ViolationRate, QoSViolationRate;
+  they drop to 0 after absorption):
       total   = integral of r(t) dt  (expected cumulative amount before
                 rejuvenation, e.g. mean number of completed requests)
       timeAvg = total / E[TimeToRejuvenation]  (mean rate until rejuvenation)
+
+Availability is not derived from the reward curves: it is already computed
+by the experiment and stored as a column of <folder>/experiments_index.csv,
+from which it is joined into the summary (older runs without that column
+are summarized without it).
 
 Usage:
     python summarize_rewards.py [folder]
@@ -96,10 +101,21 @@ def summarize(csv_path: Path):
     return row
 
 
-def main() -> None:
-    base = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd()
-    base = base.resolve()
+def load_availability(base: Path):
+    """Availability per (profile, N, D) from experiments_index.csv,
+    or None if the index (or its availability column) is missing."""
+    index_path = base / "experiments_index.csv"
+    if not index_path.exists():
+        print(f"[note] {index_path.name} not found: no availability column")
+        return None
+    index = pd.read_csv(index_path)
+    if "availability" not in index.columns:
+        print(f"[note] no 'availability' column in {index_path.name}")
+        return None
+    return index[["profile", "bucketsNumber", "bucketDepth", "availability"]]
 
+
+def run(base: Path) -> None:
     csv_files = sorted(
         p for p in base.glob("*_rewards.csv")
         if not p.name.endswith("_rewards_mapping.csv")
@@ -115,11 +131,20 @@ def main() -> None:
             rows.append(row)
             print(f"[ok]   {csv_path.name}")
 
-    out = pd.DataFrame(rows).sort_values(
-        ["profile", "bucketsNumber", "bucketDepth"])
+    out = pd.DataFrame(rows)
+    availability = load_availability(base)
+    if availability is not None:
+        out = out.merge(availability, how="left",
+                        on=["profile", "bucketsNumber", "bucketDepth"])
+    out = out.sort_values(["profile", "bucketsNumber", "bucketDepth"])
     out_path = base / "summary.csv"
     out.to_csv(out_path, index=False)
     print(f"Done: {out_path} ({len(out)} experiments)")
+
+
+def main() -> None:
+    base = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd()
+    run(base.resolve())
 
 
 if __name__ == "__main__":

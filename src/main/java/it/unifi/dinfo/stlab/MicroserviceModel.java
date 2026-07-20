@@ -31,10 +31,11 @@ public class MicroserviceModel {
     private double thresholdStdDev;
 
     private String performanceViolationProbabilityExpr;
+    private String qosViolationProbabilityExpr;
 
     private Map<ResponseTimeConfiguration, Double> thresholdViolationProbabilityMap;
 
-    private static final double DISCRETIZATION_STEP = 0.0001;
+    private static final double DISCRETIZATION_STEP = 0.1;
 
 
 
@@ -59,6 +60,7 @@ public class MicroserviceModel {
         this.thresholdMean = builder.thresholdMean;
         this.thresholdStdDev = builder.thresholdStdDev;
         this.performanceViolationProbabilityExpr = builder.performanceViolationLaw;
+        this.qosViolationProbabilityExpr = builder.qosViolationLaw;
         this.thresholdViolationProbabilityMap = Map.copyOf(builder.thresholdViolationProbabilityMap);
     }
 
@@ -181,6 +183,19 @@ public class MicroserviceModel {
         return getThroughputReward() + "*" + performanceViolationProbabilityExpr;
     }
 
+    /**
+     * Rate of completions violating the fixed QoS threshold mean + stdDev
+     * (the bucketLevel==1 slice of the violation probability map, so the
+     * threshold does not track the bucket level as in ViolationRate).
+     * Unavailable if a custom performanceViolationLaw was supplied.
+     */
+    public String getQoSViolationRateReward(){
+        if (qosViolationProbabilityExpr == null)
+            throw new IllegalStateException(
+                    "QoS violation law unavailable: a custom performanceViolationLaw was supplied");
+        return getThroughputReward() + "*" + qosViolationProbabilityExpr;
+    }
+
 
 
     public LinkedHashMap<String, String> getNamedRewards(){
@@ -193,6 +208,8 @@ public class MicroserviceModel {
             named.put("RejuvenationDueToLoad_AgingLevel" + lvl, loadRewards[lvl + 1]);
         named.put("RejuvenationDueToAging", getRejuvenationDueToAging());
         named.put("ViolationRate", getViolationRateReward());
+        if (qosViolationProbabilityExpr != null)
+            named.put("QoSViolationRate", getQoSViolationRateReward());
         return named;
     }
 
@@ -314,6 +331,7 @@ public class MicroserviceModel {
         private int bucketsNumber;
 
         private String performanceViolationLaw;
+        private String qosViolationLaw;
 
         private double thresholdMean;
         private double thresholdStdDev;
@@ -515,6 +533,7 @@ public class MicroserviceModel {
             if (performanceViolationLaw == null) {
                 calculateThresholdViolationProbabilityMap();
                 performanceViolationLaw = thresholdViolationExpr();
+                qosViolationLaw = qosViolationExpr();
                 System.out.println(performanceViolationLaw);
             }
             String conformanceLaw = "1-(" + performanceViolationLaw + ")";
@@ -617,6 +636,37 @@ public class MicroserviceModel {
                                 .append(", ");
                         closes++;
                     }
+                }
+            }
+            sb.append("1").append(")".repeat(closes));   // default
+            return sb.toString();
+        }
+
+        /**
+         * P(response time > thresholdMean + thresholdStdDev): the bucketLevel==1
+         * slice of the violation probability map (the map threshold is
+         * mean + bucketLvl*stdDev, so bucketLevel 1 pins it to mean + stdDev
+         * regardless of the bucket system state). The expression therefore
+         * depends only on AgingLevel and concurrency, with the same
+         * conventions as thresholdViolationExpr().
+         */
+        private String qosViolationExpr() {
+            String inProcess = processingRepresentation.getInProcessPlaces();
+
+            StringBuilder sb = new StringBuilder();
+            int closes = 0;
+            for (int agingLvl = 0; agingLvl <= maxAgingLevel; agingLvl++) {
+                for (int inProc = 0; inProc < maxConcurrency; inProc++) {
+                    ResponseTimeConfiguration key = new ResponseTimeConfiguration(
+                            agingLvl, 1, inProc + 1);
+                    Double p = thresholdViolationProbabilityMap.get(key);
+                    if (p == null)
+                        throw new IllegalStateException("Missing violation probability for " + key);
+                    sb.append("If(AgingLevel==").append(agingLvl)
+                            .append("&&").append(inProcess).append("==").append(inProc)
+                            .append(", ").append(BigDecimal.valueOf(p).toPlainString())
+                            .append(", ");
+                    closes++;
                 }
             }
             sb.append("1").append(")".repeat(closes));   // default
